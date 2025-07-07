@@ -14,10 +14,16 @@ export const register = async (req: Request, res: Response) => {
   }
   
   try {
-    // Step 1: Create the auth user
+    // Step 1: Create the auth user with user metadata
     const { data: authData, error: authError } = await supabase.auth.signUp({ 
       email, 
-      password 
+      password,
+      options: {
+        data: {
+          name: name.trim(),
+          phone: phone?.trim() || null
+        }
+      }
     });
     
     if (authError) {
@@ -25,42 +31,13 @@ export const register = async (req: Request, res: Response) => {
       return res.status(400).json({ error: authError.message });
     }
     
-    // Step 2: Create the user profile
-    if (authData.user) {
-      const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
-        .insert([
-          {
-            id: authData.user.id,
-            name: name.trim(),
-            phone: phone?.trim() || null,
-            email: email.trim()
-          }
-        ])
-        .select()
-        .single();
-      
-      if (profileError) {
-        console.error('Profile creation error:', profileError);
-        
-        // If profile creation fails, we should clean up the auth user
-        // Note: This requires admin privileges, you might want to handle this differently
-        if (authData.user.id) {
-          await adminSupabase.auth.admin.deleteUser(authData.user.id);
-        }
-        
-        return res.status(400).json({ 
-          error: 'Failed to create user profile',
-          details: profileError.message
-        });
-      }
-      
-      res.status(201).json({ 
-        user: authData.user,
-        profile: profileData,
-        message: 'User registered successfully'
-      });
-    }
+    // That's it! No profile creation here - the database trigger will handle it
+    // when the user confirms their email
+    
+    res.status(201).json({ 
+      user: authData.user,
+      message: 'User registered successfully. Please check your email to confirm your account.'
+    });
     
   } catch (err) {
     console.error('Registration error:', err);
