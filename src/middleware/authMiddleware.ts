@@ -1,11 +1,30 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabase } from "../config/supabaseClient.js";
+import { User } from '@supabase/supabase-js';
 
-export const authenticate = async (req: Request, res: Response, next: NextFunction) => {
+// Extend Request interface
+export interface AuthenticatedRequest extends Request {
+  user?: User;
+}
+
+export const authenticate = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const token = req.headers['authorization']?.replace('Bearer ', '');
-  if (!token) return res.status(401).json({ error: 'No token provided' });
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) return res.status(401).json({ error: 'Invalid or expired token' });
-  (req as any).user = data.user;
-  next();
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const { data, error } = await supabase.auth.getUser(token);
+    
+    if (error || !data.user) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    
+    req.user = data.user;
+    next();
+  } catch (err) {
+    console.error('Authentication error:', err);
+    return res.status(401).json({ error: 'Authentication failed' });
+  }
 };
