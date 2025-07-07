@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { supabase } from '../controllers/authController';
+import { supabase } from "../config/supabaseClient.js";
 
 export const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   const token = req.headers['authorization']?.replace('Bearer ', '');
