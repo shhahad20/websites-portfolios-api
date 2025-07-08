@@ -28,52 +28,54 @@ export const upload = multer({
 /**
  * Convert PDF text to structured Markdown format
  */
-function convertToMarkdown(pdfText: string): string {
-  const lines = pdfText
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0);
+const convertToMarkdown = (text: string): string => {
+  // First, clean up the text by removing excessive spaces
+  let cleaned = text
+    .replace(/\s+/g, ' ')  // Replace multiple spaces with single space
+    .replace(/\n\s*\n/g, '\n')  // Remove empty lines
+    .trim();
+  
+  // Split into lines and process each line
+  const lines = cleaned.split('\n').map(line => line.trim()).filter(line => line.length > 0);
   
   let markdown = '';
-  let currentSection = '';
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const nextLine = lines[i + 1] || '';
     
-    // Detect sections based on common CV keywords
-    if (isHeading(line)) {
-      currentSection = line.toLowerCase();
+    // Detect section headers (usually in ALL CAPS or specific patterns)
+    if (line.match(/^[A-Z\s]{3,}$/) || 
+        line.includes('CONTACT') || 
+        line.includes('OBJECTIVE') || 
+        line.includes('SKILLS') || 
+        line.includes('EXPERIENCE') || 
+        line.includes('EDUCATION') || 
+        line.includes('PROJECTS')) {
       markdown += `\n## ${line}\n\n`;
     }
-    // Detect contact info (usually at top)
-    else if (isContactInfo(line)) {
-      if (!markdown.includes('## Contact Information')) {
-        markdown += `## Contact Information\n\n`;
-      }
+    // Detect contact information
+    else if (line.includes('@') || line.includes('+966') || line.includes('Saudi Arabia')) {
       markdown += `- ${line}\n`;
     }
-    // Detect dates (for experience/education)
-    else if (hasDatePattern(line)) {
-      markdown += `\n### ${line}\n`;
+    // Detect job titles or company names (lines with years or specific patterns)
+    else if (line.match(/\d{4}/) && (line.includes('–') || line.includes('-'))) {
+      markdown += `\n### ${line}\n\n`;
     }
-    // Detect bullet points or skills
-    else if (isBulletPoint(line)) {
-      markdown += `- ${line.replace(/^[-•*]\s*/, '')}\n`;
+    // Detect bullet points (lines starting with common bullet indicators)
+    else if (line.startsWith('●') || line.startsWith('•') || line.startsWith('-')) {
+      markdown += `${line}\n`;
     }
-    // Regular text
+    // Regular paragraphs
     else {
-      // If it looks like a job title or position
-      if (isJobTitle(line, nextLine)) {
-        markdown += `\n**${line}**\n`;
-      } else {
-        markdown += `${line}\n`;
-      }
+      markdown += `${line}\n\n`;
     }
   }
   
-  return markdown.trim();
-}
+  // Final cleanup
+  return markdown
+    .replace(/\n{3,}/g, '\n\n')  // Replace multiple newlines with double newlines
+    .trim();
+};
 
 function isHeading(line: string): boolean {
   const headingKeywords = [
@@ -270,9 +272,8 @@ export const uploadCv = async (req: AuthenticatedRequest, res: Response, next: N
  * 2️⃣ Read the file, parse it, convert to Markdown, generate intelligent prompts, update the row.
  *    POST /cv/:uploadId/prompts
  */
-export const generatePrompts = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+export const generatePrompts = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => { 
   const { uploadId } = req.params;
-
   try {
     // 1) Fetch the record & verify ownership + status
     let { data: rows, error: fetchError } = await supabase
@@ -281,37 +282,129 @@ export const generatePrompts = async (req: AuthenticatedRequest, res: Response, 
       .eq("id", uploadId)
       .eq("user_id", req.user?.id)
       .maybeSingle();
-
     if (fetchError) throw fetchError;
     if (!rows) return res.status(404).json({ error: "Upload not found" });
-    if (rows.status !== "uploaded") {
-      return res.status(400).json({ error: `Cannot re-process a '${rows.status}' upload` });
+    // Allow reprocessing if force=true is passed as query parameter
+    const allowReprocess = req.query.force === 'true';
+    
+    if (rows.status !== "uploaded" && !allowReprocess) {
+      return res.status(400).json({ error: `Cannot re-process a '${rows.status}' upload. Add ?force=true to reprocess anyway.` });
     }
-
+    
+    // If forcing reprocess, reset the status
+    if (allowReprocess && rows.status !== "uploaded") {
+      const { error: resetError } = await supabase
+        .from("cv_uploads")
+        .update({
+          status: "uploaded",
+          error_msg: null,
+          processed_at: null,
+        })
+        .eq("id", uploadId);
+      if (resetError) throw resetError;
+      console.log('Reset upload status to allow reprocessing');
+    }
     console.log('Processing file:', rows.stored_path);
     
     // 2) Check if file exists
     if (!fs.existsSync(rows.stored_path)) {
       throw new Error(`File not found: ${rows.stored_path}`);
     }
-
-    // 3) Read and parse PDF using pdf2json
+    
+    // 3) Read and parse PDF using pdf2json with better error handling
     const dataBuffer = fs.readFileSync(rows.stored_path);
     const pdfText: string = await new Promise((resolve, reject) => {
       const pdfParser = new PDFParser();
-      pdfParser.on("pdfParser_dataError", (errData: any) => reject(errData.parserError));
-      pdfParser.on("pdfParser_dataReady", (pdfData: any) => {
-        // Extract text from all pages
-        const text = pdfData.formImage.Pages.map((page: any) =>
-          page.Texts.map((textObj: any) =>
-            decodeURIComponent(textObj.R.map((r: any) => r.T).join("")
-          )
-        ).join(" ")
-        ).join("\n");
-        resolve(text);
+      
+      pdfParser.on("pdfParser_dataError", (errData: any) => {
+        console.error('PDF parsing error:', errData.parserError);
+        reject(new Error(`PDF parsing failed: ${errData.parserError}`));
       });
-      pdfParser.parseBuffer(dataBuffer);
+      
+      pdfParser.on("pdfParser_dataReady", (pdfData: any) => {
+        try {
+          console.log('PDF Data structure:', JSON.stringify(pdfData, null, 2).substring(0, 500));
+          
+          // Check if the expected structure exists
+          if (!pdfData) {
+            console.error('Invalid PDF structure: pdfData is null/undefined');
+            reject(new Error('Invalid PDF structure: pdfData is null/undefined'));
+            return;
+          }
+          
+          // Handle both old and new pdf2json structure
+          const pages = pdfData.Pages || pdfData.formImage?.Pages;
+          
+          if (!pages || !Array.isArray(pages)) {
+            console.error('Invalid PDF structure: Pages not found or not an array');
+            console.log('Available keys:', Object.keys(pdfData));
+            reject(new Error('Invalid PDF structure: Pages not found'));
+            return;
+          }
+          
+          // Extract text from all pages with additional safety checks
+          const text = pages.map((page: any, pageIndex: number) => {
+            if (!page || !page.Texts || !Array.isArray(page.Texts)) {
+              console.warn(`Page ${pageIndex} has no texts or invalid structure`);
+              return '';
+            }
+            
+            return page.Texts.map((textObj: any) => {
+              if (!textObj || !textObj.R || !Array.isArray(textObj.R)) {
+                return '';
+              }
+              
+              const text = decodeURIComponent(
+                textObj.R.map((r: any) => r && r.T ? r.T : '').join("")
+              );
+              
+              // Fix spacing issues common with pdf2json
+              return text.replace(/\s+/g, ' ').trim();
+            }).join(" ");
+          }).join("\n");
+          
+          // Additional text cleanup for better formatting
+          const cleanedText = text
+            .replace(/\s+/g, ' ')  // Replace multiple spaces with single space
+            .replace(/\n\s*\n/g, '\n')  // Remove empty lines
+            .trim();
+          
+          if (!cleanedText.trim()) {
+            reject(new Error('No text could be extracted from the PDF'));
+            return;
+          }
+          
+          resolve(cleanedText);
+        } catch (extractError) {
+          console.error('Error during text extraction:', extractError);
+          reject(new Error(`Text extraction failed: ${extractError}`));
+        }
+      });
+      
+      // Set a timeout for PDF parsing
+      const timeout = setTimeout(() => {
+        reject(new Error('PDF parsing timed out'));
+      }, 30000); // 30 second timeout
+      
+      pdfParser.on("pdfParser_dataReady", () => {
+        clearTimeout(timeout);
+      });
+      
+      pdfParser.on("pdfParser_dataError", () => {
+        clearTimeout(timeout);
+      });
+      
+      try {
+        pdfParser.parseBuffer(dataBuffer);
+      } catch (parseError) {
+        clearTimeout(timeout);
+        reject(new Error(`Failed to parse PDF buffer: ${parseError}`));
+      }
     });
+    
+    console.log('Extracted text length:', pdfText.length);
+    console.log('First 200 chars:', pdfText.substring(0, 200));
+    
     // 4) Convert to Markdown
     const markdownContent = convertToMarkdown(pdfText);
     console.log('Generated Markdown:', markdownContent.substring(0, 200) + '...');
@@ -322,9 +415,9 @@ export const generatePrompts = async (req: AuthenticatedRequest, res: Response, 
     // 6) Create a summary from the markdown (first 500 chars)
     const summary = markdownContent.substring(0, 500) + (markdownContent.length > 500 ? '...' : '');
     
-    // 7) Clean up the uploaded file
+    // 7) Clean up the uploaded file (only if processing was successful)
     fs.unlinkSync(rows.stored_path);
-
+    
     // 8) Update Supabase row
     const { error: updateError } = await supabase
       .from("cv_uploads")
@@ -335,15 +428,15 @@ export const generatePrompts = async (req: AuthenticatedRequest, res: Response, 
         processed_at: new Date().toISOString(),
       })
       .eq("id", uploadId);
-
     if (updateError) throw updateError;
-
+    
     // 9) Return response
     res.json({ 
       extractedText: summary, // Send summary to frontend
       markdownContent: markdownContent, // Send full markdown
       examplePrompts: prompts 
     });
+    
   } catch (err: any) {
     console.error('Error in generatePrompts:', err);
     
@@ -356,7 +449,7 @@ export const generatePrompts = async (req: AuthenticatedRequest, res: Response, 
         processed_at: new Date().toISOString(),
       })
       .eq("id", uploadId);
-
+    
     next(err);
   }
 };
