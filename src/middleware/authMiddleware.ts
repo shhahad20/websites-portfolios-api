@@ -5,6 +5,7 @@ import { User } from '@supabase/supabase-js';
 // Extend Request interface
 export interface AuthenticatedRequest extends Request {
   user?: User;
+  file?: Express.Multer.File;
 }
 
 export const authenticate = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
