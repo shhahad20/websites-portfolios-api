@@ -1,238 +1,374 @@
 import multer from "multer";
-import PDFParser from "pdf2json";
+import pdf2md from "@opendocsg/pdf2md";
 import fs from "fs";
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
+import { fileURLToPath } from "url";
+import { dirname, resolve } from "path";
 import { Request, Response, NextFunction } from "express";
 import { supabase } from "../config/supabaseClient.js";
 import { AuthenticatedRequest } from "../middleware/authMiddleware.js";
 
 // emulate __dirname in ES modules
 const __filename = fileURLToPath(import.meta.url);
-const __dirname  = dirname(__filename);
+const __dirname = dirname(__filename);
 
 // ensure /uploads exists
-const uploadsDir = resolve(__dirname, '../uploads');
+const uploadsDir = resolve(__dirname, "../uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 // multer storage into local uploads folder
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename:   (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
 });
+
 export const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 
 /**
- * Convert PDF text to structured Markdown format
+ * Clean and enhance markdown from pdf2md output
  */
-const convertToMarkdown = (text: string): string => {
-  // First, clean up the text by removing excessive spaces
-  let cleaned = text
-    .replace(/\s+/g, ' ')  // Replace multiple spaces with single space
-    .replace(/\n\s*\n/g, '\n')  // Remove empty lines
+const enhanceMarkdown = (markdown: string): string => {
+  // Clean up the markdown
+  let enhanced = markdown
+    // Remove excessive newlines
+    .replace(/\n{3,}/g, "\n\n")
+    // Fix bullet points
+    .replace(/^[\s]*[•·▪▫▸▹‣⁃]\s*/gm, "- ")
+    // Fix numbered lists
+    .replace(/^[\s]*(\d+)[\.\)]\s*/gm, "$1. ")
+    // Clean up headers - remove extra spaces
+    .replace(/^#+\s+/gm, (match) => match.replace(/\s+/g, " "))
+    // Fix contact information formatting
+    .replace(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, "**$1**")
+    .replace(/(\+\d{1,3}[\s\-]?\d{1,4}[\s\-]?\d{1,4}[\s\-]?\d{1,9})/g, "**$1**")
+    // Fix dates in headers
+    .replace(/(\d{4}[\s\-–]+\d{4})/g, "*$1*")
+    .replace(/(\d{4}[\s\-–]+(present|current))/gi, "*$1*")
+    // Clean up extra spaces
+    .replace(/\s+/g, " ")
+    .replace(/\n\s+/g, "\n")
     .trim();
-  
-  // Split into lines and process each line
-  const lines = cleaned.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-  
-  let markdown = '';
-  
+
+  // Post-process to improve structure
+  const lines = enhanced.split("\n");
+  const processedLines: string[] = [];
+
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    
-    // Detect section headers (usually in ALL CAPS or specific patterns)
-    if (line.match(/^[A-Z\s]{3,}$/) || 
-        line.includes('CONTACT') || 
-        line.includes('OBJECTIVE') || 
-        line.includes('SKILLS') || 
-        line.includes('EXPERIENCE') || 
-        line.includes('EDUCATION') || 
-        line.includes('PROJECTS')) {
-      markdown += `\n## ${line}\n\n`;
+    const line = lines[i].trim();
+    const nextLine = lines[i + 1]?.trim() || "";
+
+    if (!line) continue;
+
+    // Convert sections to proper headers if they're not already
+    if (isSectionHeader(line) && !line.startsWith("#")) {
+      processedLines.push(`## ${line.toUpperCase()}`);
+      processedLines.push("");
+      continue;
     }
-    // Detect contact information
-    else if (line.includes('@') || line.includes('+966') || line.includes('Saudi Arabia')) {
-      markdown += `- ${line}\n`;
+
+    // Convert job titles/positions to subheaders
+    if (isJobTitle(line, nextLine) && !line.startsWith("#")) {
+      processedLines.push(`### ${line}`);
+      processedLines.push("");
+      continue;
     }
-    // Detect job titles or company names (lines with years or specific patterns)
-    else if (line.match(/\d{4}/) && (line.includes('–') || line.includes('-'))) {
-      markdown += `\n### ${line}\n\n`;
+
+    // Add emphasis to company names
+    if (isCompanyName(line, lines[i - 1]?.trim() || "")) {
+      processedLines.push(`**${line}**`);
+      processedLines.push("");
+      continue;
     }
-    // Detect bullet points (lines starting with common bullet indicators)
-    else if (line.startsWith('●') || line.startsWith('•') || line.startsWith('-')) {
-      markdown += `${line}\n`;
-    }
-    // Regular paragraphs
-    else {
-      markdown += `${line}\n\n`;
-    }
+
+    processedLines.push(line);
   }
-  
-  // Final cleanup
-  return markdown
-    .replace(/\n{3,}/g, '\n\n')  // Replace multiple newlines with double newlines
+
+  return processedLines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 };
 
-function isHeading(line: string): boolean {
-  const headingKeywords = [
-    'experience', 'education', 'skills', 'summary', 'objective',
-    'work experience', 'employment', 'career', 'background',
-    'qualifications', 'certifications', 'achievements', 'projects',
-    'contact', 'personal', 'profile', 'about', 'languages',
-    'references', 'awards', 'publications', 'training'
+/**
+ * Check if a line is a section header
+ */
+function isSectionHeader(line: string): boolean {
+  const sectionKeywords = [
+    "career objective",
+    "objective",
+    "summary",
+    "profile",
+    "work experience",
+    "experience",
+    "employment",
+    "professional experience",
+    "education",
+    "academic background",
+    "qualifications",
+    "skills",
+    "technical skills",
+    "core competencies",
+    "expertise",
+    "projects",
+    "key projects",
+    "selected projects",
+    "certifications",
+    "certificates",
+    "professional development",
+    "achievements",
+    "accomplishments",
+    "awards",
+    "languages",
+    "language skills",
+    "personal skills",
+    "references",
+    "contact",
+    "personal information",
   ];
-  
-  const lowerLine = line.toLowerCase();
-  return headingKeywords.some(keyword => 
-    lowerLine.includes(keyword) && 
-    line.length < 50 && 
-    !line.includes('@') && 
-    !line.includes('.')
+
+  const lowerLine = line.toLowerCase().trim();
+
+  return (
+    sectionKeywords.some(
+      (keyword) =>
+        lowerLine === keyword ||
+        (lowerLine.includes(keyword) && line.length < 50)
+    ) ||
+    // All caps short lines are likely headers
+    (line === line.toUpperCase() &&
+      line.length > 2 &&
+      line.length < 50 &&
+      !line.includes("@") &&
+      !line.includes("+") &&
+      !hasDatePattern(line))
   );
 }
 
-function isContactInfo(line: string): boolean {
-  const contactPatterns = [
-    /@/,                                    // Email
-    /\+?\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}/, // Phone
-    /linkedin\.com|github\.com|twitter\.com/, // Social media
-    /^[A-Za-z\s,]+\d{5}$/,                 // Address with zip
-    /\b\d{5}\b/                            // Zip code
-  ];
-  
-  return contactPatterns.some(pattern => pattern.test(line));
-}
-
-function hasDatePattern(line: string): boolean {
-  const datePatterns = [
-    /\b\d{4}\s*[-–]\s*\d{4}\b/,           // 2020 - 2023
-    /\b\d{4}\s*[-–]\s*present\b/i,        // 2020 - Present
-    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{4}/i, // Jan 2020
-    /\b\d{1,2}\/\d{4}\s*[-–]\s*\d{1,2}\/\d{4}\b/ // 01/2020 - 12/2023
-  ];
-  
-  return datePatterns.some(pattern => pattern.test(line));
-}
-
-function isBulletPoint(line: string): boolean {
-  return /^[-•*]\s/.test(line) || 
-         /^[A-Z][a-z]+:/.test(line) ||  // "Skills:", "Languages:"
-         (line.includes('•') || line.includes('▪') || line.includes('‣'));
-}
-
+/**
+ * Check if a line is a job title
+ */
 function isJobTitle(line: string, nextLine: string): boolean {
-  // Check if current line looks like a job title and next line has company/date info
   const jobTitlePatterns = [
     /\b(manager|director|engineer|developer|analyst|consultant|coordinator|specialist|assistant|lead|senior|junior)\b/i,
-    /\b(ceo|cto|cfo|vp|vice president)\b/i
+    /\b(ceo|cto|cfo|vp|vice president|president|head|chief)\b/i,
+    /\b(intern|trainee|associate|executive|officer|administrator)\b/i,
+    /\b(designer|architect|programmer|technician|supervisor)\b/i,
+    /\b(ambassador|representative|advisor|consultant|instructor|teacher)\b/i,
   ];
-  
-  const companyPatterns = [
-    /\b(inc|llc|corp|company|ltd|limited)\b/i,
-    /\b(university|college|school)\b/i
-  ];
-  
-  return jobTitlePatterns.some(pattern => pattern.test(line)) ||
-         (line.length < 80 && companyPatterns.some(pattern => pattern.test(nextLine)));
+
+  return (
+    (jobTitlePatterns.some((pattern) => pattern.test(line)) &&
+      (hasDatePattern(line) || hasDatePattern(nextLine))) ||
+    (hasDatePattern(line) && line.length < 100 && line.length > 10)
+  );
 }
 
 /**
- * Generate intelligent prompts based on Markdown structure
+ * Check if a line is a company name
+ */
+function isCompanyName(line: string, previousLine: string): boolean {
+  const companyPatterns = [
+    /\b(inc|llc|corp|company|ltd|limited|co\.)\b/i,
+    /\b(university|college|school|institute|academy)\b/i,
+    /\b(ministry|government|department|agency)\b/i,
+    /\b(group|organization|foundation|firm)\b/i,
+  ];
+
+  return (
+    companyPatterns.some((pattern) => pattern.test(line)) ||
+    (isJobTitle(previousLine, "") &&
+      !hasDatePattern(line) &&
+      line.length < 80 &&
+      line.length > 5)
+  );
+}
+
+/**
+ * Check if a line has date pattern
+ */
+function hasDatePattern(line: string): boolean {
+  const datePatterns = [
+    /\b\d{4}\s*[-–]\s*\d{4}\b/,
+    /\b\d{4}\s*[-–]\s*(present|current)\b/i,
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{4}/i,
+    /\b\d{1,2}\/\d{4}\s*[-–]\s*\d{1,2}\/\d{4}\b/,
+    /\b(20\d{2})\s*[-–]\s*(20\d{2}|present|current)\b/i,
+  ];
+
+  return datePatterns.some((pattern) => pattern.test(line));
+}
+
+/**
+ * Generate intelligent prompts based on CV content
  */
 function generateIntelligentPrompts(markdown: string): string[] {
   const prompts: string[] = [];
+  const content = markdown.toLowerCase();
   const sections = extractSections(markdown);
-  
-  // Basic prompts that work for any CV
+
+  // Basic prompts
   prompts.push("Summarize my CV in 3-4 sentences");
   prompts.push("What are my contact details?");
-  
+
   // Experience-based prompts
   if (sections.experience) {
     prompts.push("What is my work experience?");
     prompts.push("What are my most recent job responsibilities?");
-    prompts.push("How many years of experience do I have?");
     prompts.push("What companies have I worked for?");
+
+    if (
+      content.includes("senior") ||
+      content.includes("lead") ||
+      content.includes("manager")
+    ) {
+      prompts.push("What leadership experience do I have?");
+    }
+
+    if (content.includes("remote") || content.includes("freelance")) {
+      prompts.push("What remote work experience do I have?");
+    }
   }
-  
+
   // Skills-based prompts
   if (sections.skills) {
     prompts.push("What are my technical skills?");
-    prompts.push("What programming languages do I know?");
-    prompts.push("What are my core competencies?");
+
+    if (
+      content.includes("javascript") ||
+      content.includes("react") ||
+      content.includes("node")
+    ) {
+      prompts.push("What JavaScript and web development skills do I have?");
+    }
+
+    if (
+      content.includes("python") ||
+      content.includes("data") ||
+      content.includes("sql")
+    ) {
+      prompts.push("What programming and data analysis skills do I have?");
+    }
+
+    if (
+      content.includes("design") ||
+      content.includes("adobe") ||
+      content.includes("ui/ux")
+    ) {
+      prompts.push("What design skills do I have?");
+    }
   }
-  
-  // Education-based prompts
+
+  // Education prompts
   if (sections.education) {
     prompts.push("What is my educational background?");
-    prompts.push("What degrees do I have?");
-    prompts.push("Where did I study?");
+
+    if (
+      content.includes("computer science") ||
+      content.includes("software engineering")
+    ) {
+      prompts.push("What is my technical education?");
+    }
+
+    if (content.includes("bootcamp") || content.includes("certification")) {
+      prompts.push("What additional training and certifications do I have?");
+    }
   }
-  
-  // Certification-based prompts
-  if (sections.certifications) {
-    prompts.push("What certifications do I have?");
-    prompts.push("What professional qualifications do I hold?");
-  }
-  
-  // Project-based prompts
+
+  // Project prompts
   if (sections.projects) {
     prompts.push("What projects have I worked on?");
-    prompts.push("Can you describe my project experience?");
+    prompts.push("Can you describe my key projects in detail?");
+
+    if (content.includes("e-commerce") || content.includes("full-stack")) {
+      prompts.push("What full-stack development projects have I completed?");
+    }
   }
-  
-  // Achievement-based prompts
-  if (sections.achievements || sections.awards) {
-    prompts.push("What are my key achievements?");
-    prompts.push("What awards or recognitions have I received?");
+
+  // Specific technology prompts
+  if (content.includes("react") && content.includes("node")) {
+    prompts.push("What full-stack JavaScript experience do I have?");
   }
-  
-  // Language prompts
-  if (sections.languages) {
+
+  if (content.includes("mongodb") || content.includes("database")) {
+    prompts.push("What database experience do I have?");
+  }
+
+  // Soft skills and teamwork
+  if (
+    content.includes("team") ||
+    content.includes("collaboration") ||
+    content.includes("scrum")
+  ) {
+    prompts.push("What teamwork and collaboration skills do I have?");
+  }
+
+  // Language skills
+  if (
+    content.includes("language") ||
+    content.includes("arabic") ||
+    content.includes("english")
+  ) {
     prompts.push("What languages do I speak?");
   }
-  
-  // Dynamic prompts based on content
-  if (markdown.includes('leadership') || markdown.includes('team')) {
-    prompts.push("What leadership experience do I have?");
+
+  // Location and availability
+  if (content.includes("saudi") || content.includes("riyadh")) {
+    prompts.push("What is my location and work availability?");
   }
-  
-  if (markdown.includes('startup') || markdown.includes('entrepreneur')) {
-    prompts.push("What startup or entrepreneurial experience do I have?");
-  }
-  
-  return prompts;
+
+  return prompts.slice(0, 15); // Limit to 15 prompts
 }
 
+/**
+ * Extract sections from markdown
+ */
 function extractSections(markdown: string): Record<string, boolean> {
   const sections: Record<string, boolean> = {};
-  const lines = markdown.split('\n');
-  
+  const lines = markdown.split("\n");
+
   for (const line of lines) {
-    if (line.startsWith('## ')) {
-      const sectionName = line.substring(3).toLowerCase();
-      if (sectionName.includes('experience') || sectionName.includes('work')) {
+    if (line.startsWith("## ") || line.startsWith("# ")) {
+      const sectionName = line.replace(/^#+\s*/, "").toLowerCase();
+
+      if (
+        sectionName.includes("experience") ||
+        sectionName.includes("work") ||
+        sectionName.includes("employment")
+      ) {
         sections.experience = true;
-      } else if (sectionName.includes('skill')) {
+      } else if (
+        sectionName.includes("skill") ||
+        sectionName.includes("competenc") ||
+        sectionName.includes("expertise")
+      ) {
         sections.skills = true;
-      } else if (sectionName.includes('education')) {
+      } else if (
+        sectionName.includes("education") ||
+        sectionName.includes("academic") ||
+        sectionName.includes("qualification")
+      ) {
         sections.education = true;
-      } else if (sectionName.includes('certification') || sectionName.includes('qualification')) {
+      } else if (
+        sectionName.includes("certification") ||
+        sectionName.includes("certificate") ||
+        sectionName.includes("course")
+      ) {
         sections.certifications = true;
-      } else if (sectionName.includes('project')) {
+      } else if (sectionName.includes("project")) {
         sections.projects = true;
-      } else if (sectionName.includes('achievement') || sectionName.includes('award')) {
+      } else if (
+        sectionName.includes("achievement") ||
+        sectionName.includes("award")
+      ) {
         sections.achievements = true;
-      } else if (sectionName.includes('language')) {
+      } else if (sectionName.includes("language")) {
         sections.languages = true;
       }
     }
   }
-  
+
   return sections;
 }
 
@@ -240,7 +376,11 @@ function extractSections(markdown: string): Record<string, boolean> {
  * 1️⃣ Upload the PDF, insert a row with status='uploaded', return the uploadId.
  *    POST /cv/upload
  */
-export const uploadCv = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+export const uploadCv = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     if (req.file.mimetype !== "application/pdf") {
@@ -262,17 +402,51 @@ export const uploadCv = async (req: AuthenticatedRequest, res: Response, next: N
 
     if (error) throw error;
 
-    res.status(201).json({ uploadId: data.id, message: "PDF uploaded successfully" });
+    res
+      .status(201)
+      .json({ uploadId: data.id, message: "PDF uploaded successfully" });
   } catch (err: any) {
     next(err);
   }
 };
 
 /**
- * 2️⃣ Read the file, parse it, convert to Markdown, generate intelligent prompts, update the row.
+ * 2️⃣ Read the file, parse it using pdf2md, enhance the markdown, generate prompts, update the row.
  *    POST /cv/:uploadId/prompts
  */
-export const generatePrompts = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => { 
+/**
+ * Collapse runs of single-letter tokens into proper words.
+ */
+function collapsePhantomLines(input: string): string {
+  const lines = input.split(/\r?\n/);
+  const outLines: string[] = [];
+
+  for (let line of lines) {
+    // split on any whitespace
+    const tokens = line.trim().split(/\s+/);
+    if (tokens.length > 0) {
+      // count how many are single A–Z letters
+      const letterTokens = tokens.filter(
+        (t) => t.length === 1 && /^[A-Za-z]$/.test(t)
+      ).length;
+      if (letterTokens / tokens.length > 0.6) {
+        // collapse ALL tokens into one “word”
+        outLines.push(tokens.join(""));
+        continue;
+      }
+    }
+    // otherwise just collapse any multi‑spaces internally
+    outLines.push(line.replace(/\s+/g, " ").trim());
+  }
+
+  return outLines.join("\n");
+}
+
+export const generatePrompts = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => {
   const { uploadId } = req.params;
   try {
     // 1) Fetch the record & verify ownership + status
@@ -282,15 +456,19 @@ export const generatePrompts = async (req: AuthenticatedRequest, res: Response, 
       .eq("id", uploadId)
       .eq("user_id", req.user?.id)
       .maybeSingle();
+
     if (fetchError) throw fetchError;
     if (!rows) return res.status(404).json({ error: "Upload not found" });
+
     // Allow reprocessing if force=true is passed as query parameter
-    const allowReprocess = req.query.force === 'true';
-    
+    const allowReprocess = req.query.force === "true";
+
     if (rows.status !== "uploaded" && !allowReprocess) {
-      return res.status(400).json({ error: `Cannot re-process a '${rows.status}' upload. Add ?force=true to reprocess anyway.` });
+      return res.status(400).json({
+        error: `Cannot re-process a '${rows.status}' upload. Add ?force=true to reprocess anyway.`,
+      });
     }
-    
+
     // If forcing reprocess, reset the status
     if (allowReprocess && rows.status !== "uploaded") {
       const { error: resetError } = await supabase
@@ -302,144 +480,84 @@ export const generatePrompts = async (req: AuthenticatedRequest, res: Response, 
         })
         .eq("id", uploadId);
       if (resetError) throw resetError;
-      console.log('Reset upload status to allow reprocessing');
+      console.log("Reset upload status to allow reprocessing");
     }
-    console.log('Processing file:', rows.stored_path);
-    
+
+    console.log("Processing file:", rows.stored_path);
+
     // 2) Check if file exists
     if (!fs.existsSync(rows.stored_path)) {
       throw new Error(`File not found: ${rows.stored_path}`);
     }
-    
-    // 3) Read and parse PDF using pdf2json with better error handling
-    const dataBuffer = fs.readFileSync(rows.stored_path);
-    const pdfText: string = await new Promise((resolve, reject) => {
-      const pdfParser = new PDFParser();
-      
-      pdfParser.on("pdfParser_dataError", (errData: any) => {
-        console.error('PDF parsing error:', errData.parserError);
-        reject(new Error(`PDF parsing failed: ${errData.parserError}`));
-      });
-      
-      pdfParser.on("pdfParser_dataReady", (pdfData: any) => {
-        try {
-          console.log('PDF Data structure:', JSON.stringify(pdfData, null, 2).substring(0, 500));
-          
-          // Check if the expected structure exists
-          if (!pdfData) {
-            console.error('Invalid PDF structure: pdfData is null/undefined');
-            reject(new Error('Invalid PDF structure: pdfData is null/undefined'));
-            return;
-          }
-          
-          // Handle both old and new pdf2json structure
-          const pages = pdfData.Pages || pdfData.formImage?.Pages;
-          
-          if (!pages || !Array.isArray(pages)) {
-            console.error('Invalid PDF structure: Pages not found or not an array');
-            console.log('Available keys:', Object.keys(pdfData));
-            reject(new Error('Invalid PDF structure: Pages not found'));
-            return;
-          }
-          
-          // Extract text from all pages with additional safety checks
-          const text = pages.map((page: any, pageIndex: number) => {
-            if (!page || !page.Texts || !Array.isArray(page.Texts)) {
-              console.warn(`Page ${pageIndex} has no texts or invalid structure`);
-              return '';
-            }
-            
-            return page.Texts.map((textObj: any) => {
-              if (!textObj || !textObj.R || !Array.isArray(textObj.R)) {
-                return '';
-              }
-              
-              const text = decodeURIComponent(
-                textObj.R.map((r: any) => r && r.T ? r.T : '').join("")
-              );
-              
-              // Fix spacing issues common with pdf2json
-              return text.replace(/\s+/g, ' ').trim();
-            }).join(" ");
-          }).join("\n");
-          
-          // Additional text cleanup for better formatting
-          const cleanedText = text
-            .replace(/\s+/g, ' ')  // Replace multiple spaces with single space
-            .replace(/\n\s*\n/g, '\n')  // Remove empty lines
-            .trim();
-          
-          if (!cleanedText.trim()) {
-            reject(new Error('No text could be extracted from the PDF'));
-            return;
-          }
-          
-          resolve(cleanedText);
-        } catch (extractError) {
-          console.error('Error during text extraction:', extractError);
-          reject(new Error(`Text extraction failed: ${extractError}`));
-        }
-      });
-      
-      // Set a timeout for PDF parsing
-      const timeout = setTimeout(() => {
-        reject(new Error('PDF parsing timed out'));
-      }, 30000); // 30 second timeout
-      
-      pdfParser.on("pdfParser_dataReady", () => {
-        clearTimeout(timeout);
-      });
-      
-      pdfParser.on("pdfParser_dataError", () => {
-        clearTimeout(timeout);
-      });
-      
-      try {
-        pdfParser.parseBuffer(dataBuffer);
-      } catch (parseError) {
-        clearTimeout(timeout);
-        reject(new Error(`Failed to parse PDF buffer: ${parseError}`));
-      }
-    });
-    
-    console.log('Extracted text length:', pdfText.length);
-    console.log('First 200 chars:', pdfText.substring(0, 200));
-    
-    // 4) Convert to Markdown
-    const markdownContent = convertToMarkdown(pdfText);
-    console.log('Generated Markdown:', markdownContent.substring(0, 200) + '...');
-    
-    // 5) Generate intelligent prompts
-    const prompts = generateIntelligentPrompts(markdownContent);
-    
+
+    // right before: const rawMarkdown = await pdf2md(rows.stored_path);
+    const stats = fs.statSync(rows.stored_path);
+    console.log("🛠 File exists, size:", stats.size);
+
+    // 3) Read the file yourself, then pass the Buffer to pdf2md
+    const fileBuffer = fs.readFileSync(rows.stored_path);
+    console.log("Buffer length:", fileBuffer.byteLength);
+
+    const rawMarkdown = await pdf2md(fileBuffer);
+
+    if (!rawMarkdown || rawMarkdown.trim().length === 0) {
+      throw new Error("No content could be extracted from the PDF");
+    }
+    function collapseLetterGaps(s: string): string {
+      let prev: string;
+      do {
+        prev = s;
+        // ([A-Za-z0-9])  capture a letter or digit
+        // \s+            one or more whitespace (spaces/newlines/tabs)
+        // ([A-Za-z0-9])  capture the next letter or digit
+        // replace with $1$2 (glue them together)
+        s = s.replace(/([A-Za-z0-9])\s+([A-Za-z0-9])/g, "$1$2");
+      } while (s !== prev);
+      return s;
+    }
+    // const preprocessed = collapsePhantomLines(rawMarkdown);
+    const preprocessed = collapseLetterGaps(rawMarkdown);
+    // (Optional) Remove spaces before punctuation, e.g. "Word , Next" → "Word, Next"
+    const cleaned = preprocessed.replace(/\s+([,.;:!?])/g, "$1");
+
+    // 4) Now feed into your existing pipeline:
+    // Log lengths so you can verify it actually shrank:
+    console.log("RAW length:", rawMarkdown.length);
+    console.log("PREPROCESSED length:", preprocessed.length);
+
+    // 4) Now feed it through your existing pipeline
+    const enhancedMarkdown = enhanceMarkdown(cleaned);
+    const prompts = generateIntelligentPrompts(enhancedMarkdown);
     // 6) Create a summary from the markdown (first 500 chars)
-    const summary = markdownContent.substring(0, 500) + (markdownContent.length > 500 ? '...' : '');
-    
+    const summary =
+      enhancedMarkdown.substring(0, 500) +
+      (enhancedMarkdown.length > 500 ? "..." : "");
+
     // 7) Clean up the uploaded file (only if processing was successful)
     fs.unlinkSync(rows.stored_path);
-    
+
     // 8) Update Supabase row
     const { error: updateError } = await supabase
       .from("cv_uploads")
       .update({
         status: "processed",
-        extracted_text: markdownContent, // Store full markdown
+        extracted_text: enhancedMarkdown, // Store full enhanced markdown
         prompts,
         processed_at: new Date().toISOString(),
       })
       .eq("id", uploadId);
+
     if (updateError) throw updateError;
-    
+
     // 9) Return response
-    res.json({ 
+    res.json({
       extractedText: summary, // Send summary to frontend
-      markdownContent: markdownContent, // Send full markdown
-      examplePrompts: prompts 
+      markdownContent: enhancedMarkdown, // Send full enhanced markdown
+      examplePrompts: prompts,
     });
-    
   } catch (err: any) {
-    console.error('Error in generatePrompts:', err);
-    
+    console.error("Error in generatePrompts:", err);
+
     // On any failure, mark row as error
     await supabase
       .from("cv_uploads")
@@ -449,7 +567,7 @@ export const generatePrompts = async (req: AuthenticatedRequest, res: Response, 
         processed_at: new Date().toISOString(),
       })
       .eq("id", uploadId);
-    
+
     next(err);
   }
 };
