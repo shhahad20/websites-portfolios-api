@@ -11,6 +11,8 @@
     "build": "rimraf dist && tsc"
   },
   "dependencies": {
+    "@google/genai": "^1.8.0",
+    "@google/generative-ai": "^0.24.1",
     "@opendocsg/pdf2md": "^0.2.1",
     "@supabase/supabase-js": "^2.50.3",
     "dotenv": "^17.0.1",
