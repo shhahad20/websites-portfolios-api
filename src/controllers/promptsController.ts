@@ -72,10 +72,37 @@ export const convertPdfToMd = async (
   try {
     const fileBuffer = fs.readFileSync(req.file.path);
     const markdown = await pdf2md(fileBuffer);
-    res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-    res.send(markdown);
+
+    // Save file info and extracted text to cv_uploads
+    const { data, error } = await supabase
+      .from("cv_uploads")
+      .insert({
+        user_id: req.user?.id,
+        original_name: req.file.originalname,
+        stored_path: req.file.path,
+        mimetype: req.file.mimetype,
+        extracted_text: markdown,
+        status: "processed"
+      })
+      .select("id")
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json({
+      uploadId: data.id,
+      message: "PDF converted and saved successfully",
+      extractedText: markdown
+    });
   } catch (error) {
     console.error("Error converting PDF:", error);
+    // Optionally update status to 'failed' if needed
+    if (req.file && req.file.path) {
+      await supabase
+        .from("cv_uploads")
+        .update({ status: "failed" })
+        .eq("stored_path", req.file.path);
+    }
     res.status(500).json({ error: "Failed to convert PDF" });
   }
 };
