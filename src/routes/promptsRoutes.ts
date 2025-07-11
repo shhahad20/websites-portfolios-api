@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { upload, uploadCv, convertPdfToMd } from "../controllers/promptsController.js";
 import { authenticate } from "../middleware/authMiddleware.js";
+import { portfolioChatWithPath } from "../controllers/aiController.js";
 
 const router = Router();
 
@@ -10,5 +11,7 @@ router.post("/cv/upload", authenticate, upload.single("file"), uploadCv);
 
 // Step 2: generate prompts on demand
 router.post("/cv/prompts", authenticate,upload.single("file"), convertPdfToMd);
+
+router.post("/:clientName", portfolioChatWithPath);
 
 export default router;
