@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import dotenv from "dotenv";
-import { supabase } from "../config/supabaseClient.js";
+import { adminSupabase, supabase } from "../config/supabaseClient.js";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { CV_SYSTEM_PROMPT } from "../config/prompts.js";
 
@@ -198,104 +198,128 @@ export const portfolioChatWithPath = async (
 ) => {
   try {
     const { messages } = req.body;
-    const clientName = req.params.clientName; // From route: /api/portfolio/:clientName/chat
+    const clientSlug = req.params.clientName;
 
-    // Validate messages
-    if (!messages || messages.length === 0) {
+    // 1) Validate inputs
+    if (!messages?.length) {
       return res.status(400).json({ error: "No messages provided" });
     }
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage.content) {
       return res.status(400).json({ error: "No message content provided" });
     }
-    if (!clientName) {
+    if (!clientSlug) {
       return res.status(400).json({ error: "Client identifier required" });
     }
 
-    // Get client data by slug
-    const { data: clientData, error } = await supabase
+    // 2) Load profile by slug (case-insensitive) - removed .single()
+    console.log("Looking for client slug:", clientSlug);
+    
+    const {
+      data: clientDataArray,
+      error: profileError,
+    } = await adminSupabase
       .from("profiles")
-      .select(
-        `
-        id, 
-        name, 
-        active_cv_id (
-          id, 
-          extracted_text, 
-          original_name, 
-          created_at
-        )
-      `
-      )
-      .eq("name", clientName)
-      .single();
+      .select("id, name, active_cv_id")
+      .ilike("name", clientSlug);
 
-    if (error || !clientData) {
-      return res.status(404).json({
+    if (profileError) {
+      console.error("Supabase profile error:", profileError);
+      return res.status(500).json({ error: "Database error" });
+    }
+    
+    console.log("Found profiles:", clientDataArray);
+    
+    // Check if any profiles were found
+    if (!clientDataArray || clientDataArray.length === 0) {
+      // Let's try a broader search to see what's actually in the database
+      const { data: allProfiles } = await adminSupabase
+        .from("profiles")
+        .select("id, name")
+        .limit(10);
+      
+      console.log("Available profiles in database:", allProfiles);
+      
+      return res.status(404).json({ 
         error: "Portfolio not found.",
+        debug: {
+          searchedFor: clientSlug,
+          availableProfiles: allProfiles?.map(p => p.name) || []
+        }
       });
     }
 
-    // Get active CV for this client
-    const activeCVs = clientData.active_cv_id;
-
-    if (activeCVs.length === 0) {
-      return res.status(404).json({
-        error: "No active CV found for this portfolio.",
-      });
+    // Handle multiple matches (optional: you might want to be more specific)
+    if (clientDataArray.length > 1) {
+      console.warn(`Multiple profiles found for slug: ${clientSlug}`);
     }
 
-    // Use the most recent active CV
-    const activeCV = activeCVs.sort(
-      (a: any, b: any) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    )[0];
+    // Use the first match
+    const clientData = clientDataArray[0];
 
-    const cvContent = activeCV.extracted_text;
-    const fileName = activeCV.original_name;
+    // 3) Fetch the CV row (by ID if set, otherwise latest)
+    let cvQuery = adminSupabase
+      .from("cv_uploads")
+      .select("id, extracted_text, original_name, created_at");
+
+    if (clientData.active_cv_id) {
+      cvQuery = cvQuery.eq("id", clientData.active_cv_id);
+    } else {
+      // Add a filter to only get CVs for this specific profile/user
+      // Assuming cv_uploads has a user_id or profile_id column
+      cvQuery = cvQuery
+        .eq("user_id", clientData.id) // Adjust column name as needed
+        .order("created_at", { ascending: false })
+        .limit(1);
+    }
+
+    const { data: cvRows, error: cvError } = await cvQuery;
+
+    if (cvError) {
+      console.error("Supabase CV fetch error:", cvError);
+      return res
+        .status(500)
+        .json({ error: "Error fetching CV data from database" });
+    }
+    if (!cvRows?.length) {
+      return res
+        .status(404)
+        .json({ error: "No CV data found. Please upload a CV first." });
+    }
+
+    const activeCV = cvRows[0];
+    const { extracted_text: cvContent, original_name: fileName, created_at } =
+      activeCV;
 
     if (!cvContent) {
-      return res.status(400).json({
-        error: "CV content not available. Please try again later.",
-      });
+      return res
+        .status(400)
+        .json({ error: "CV content not available. Please try again later." });
     }
 
-    // Build conversation history
+    // 4) Build conversation history
     const conversationHistory = messages
       .slice(0, -1)
-      .map(
-        (msg: any) =>
-          `${msg.role === "user" ? "Visitor" : "Assistant"}: ${msg.content}`
+      .map((msg: any) =>
+        msg.role === "user" ? `Visitor: ${msg.content}` : `Assistant: ${msg.content}`
       )
       .join("\n");
 
-    // Client-specific system prompt
-    const CLIENT_PORTFOLIO_PROMPT = `You are an AI assistant for ${clientData.name}'s professional portfolio. You help visitors learn about ${clientData.name}'s skills, experience, and qualifications based on their CV/resume.
-
-INSTRUCTIONS:
-1. Always refer to ${clientData.name} by name when appropriate
-2. Be professional, friendly, and helpful to potential employers or collaborators
-3. Highlight key achievements and skills relevant to the visitor's questions
-4. If information isn't in the CV, politely state it's not available
-5. Encourage visitors to contact ${clientData.name} for more information
-6. Be enthusiastic about ${clientData.name}'s qualifications while remaining factual
-
-TONE: Professional, welcoming, and informative - representing ${clientData.name} in the best light
-
-REMEMBER: You're helping visitors understand why they should hire or collaborate with ${clientData.name}.`;
-
-    const prompt = `${CLIENT_PORTFOLIO_PROMPT}
+    // 5) System prompt
+    const CLIENT_PORTFOLIO_PROMPT = `
+You are an AI assistant for ${clientData.name}'s professional portfolio.
+Use ONLY the information from their CV below to answer visitor questions.
 
 ${clientData.name.toUpperCase()}'S CV:
 ${cvContent}
 
-${conversationHistory ? `CONVERSATION HISTORY:\n${conversationHistory}\n` : ""}
-
+${conversationHistory ? `CONVERSATION HISTORY:\n${conversationHistory}\n\n` : ""}
 VISITOR'S QUESTION: ${lastMessage.content}
 
-Please provide a helpful response about ${clientData.name} based on their CV.`;
+Please respond professionally, accurately, and in the tone of a friendly portfolio guide for ${clientData.name}.
+    `.trim();
 
-    // Generate AI response
+    // 6) Generate
     const model = genAI.getGenerativeModel({
       model: "gemini-2.0-flash",
       generationConfig: {
@@ -305,20 +329,20 @@ Please provide a helpful response about ${clientData.name} based on their CV.`;
         maxOutputTokens: 2048,
       },
     });
+    const aiResp = await model.generateContent(CLIENT_PORTFOLIO_PROMPT);
+    const reply = aiResp.response.text();
 
-    const response = await model.generateContent(prompt);
-    const reply = response.response.text();
-
-    res.json({
+    // 7) Return
+    return res.json({
       reply,
       client_info: {
         name: clientData.name,
         cv_file: fileName,
-        last_updated: activeCV.created_at,
+        last_updated: created_at,
       },
     });
-  } catch (error) {
-    console.error("Error in portfolioChatWithPath:", error);
-    res.status(500).json({ error: "Error generating AI response" });
+  } catch (err) {
+    console.error("Error in portfolioChatWithPath:", err);
+    return res.status(500).json({ error: "Error generating AI response" });
   }
 };
