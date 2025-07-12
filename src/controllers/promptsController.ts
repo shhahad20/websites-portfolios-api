@@ -8,21 +8,21 @@ import { supabase } from "../config/supabaseClient.js";
 import { AuthenticatedRequest } from "../middleware/authMiddleware.js";
 
 // emulate __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// const __filename = fileURLToPath(import.meta.url);
+// const __dirname = dirname(__filename);
 
-// ensure /uploads exists
-const uploadsDir = resolve(__dirname, "../uploads");
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+// // ensure /uploads exists
+// const uploadsDir = resolve(__dirname, "../uploads");
+// if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-// multer storage into local uploads folder
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
-});
+// // multer storage into local uploads folder
+// const storage = multer.diskStorage({
+//   destination: (_req, _file, cb) => cb(null, uploadsDir),
+//   filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+// });
 
 export const upload = multer({
-  storage,
+   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 

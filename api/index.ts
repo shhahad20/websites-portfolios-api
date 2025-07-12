@@ -11,9 +11,9 @@ const app = express();
 app.use(express.json());
 
 
-app.use('/api/auth', authRoutes);
-app.use('/api/pdf', promptsRoutes);
-app.post("/api/ai/chat", aiChat);
+app.use('/auth', authRoutes);
+app.use('/pdf', promptsRoutes);
+app.post("/ai/chat", aiChat);
 
 app.get('/', (_req: Request, res: Response) => {
   res.send('Hello World!');
@@ -21,7 +21,7 @@ app.get('/', (_req: Request, res: Response) => {
 
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server is running at http://localhost:${port}`);
-});
- 
+// app.listen(port, () => {
+//   console.log(`Server is running at http://localhost:${port}`);
+// });
+ export default app;
