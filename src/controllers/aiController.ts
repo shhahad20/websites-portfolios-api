@@ -116,11 +116,9 @@ Please provide a helpful and accurate response based on the CV content above.`;
     // More specific error handling
     if (error instanceof Error) {
       if (error.message.includes("API")) {
-        return res
-          .status(503)
-          .json({
-            error: "AI service temporarily unavailable. Please try again.",
-          });
+        return res.status(503).json({
+          error: "AI service temporarily unavailable. Please try again.",
+        });
       }
       if (error.message.includes("quota")) {
         return res
@@ -214,38 +212,35 @@ export const portfolioChatWithPath = async (
 
     // 2) Load profile by slug (case-insensitive) - removed .single()
     console.log("Looking for client slug:", clientSlug);
-    
-    const {
-      data: clientDataArray,
-      error: profileError,
-    } = await adminSupabase
+
+    const { data: clientDataArray, error: profileError } = await adminSupabase
       .from("profiles")
-      .select("id, name, active_cv_id")
-      .ilike("name", clientSlug);
+      .select("id,name, user_name, active_cv_id")
+      .ilike("user_name", clientSlug);
 
     if (profileError) {
       console.error("Supabase profile error:", profileError);
       return res.status(500).json({ error: "Database error" });
     }
-    
+
     console.log("Found profiles:", clientDataArray);
-    
+
     // Check if any profiles were found
     if (!clientDataArray || clientDataArray.length === 0) {
       // Let's try a broader search to see what's actually in the database
       const { data: allProfiles } = await adminSupabase
         .from("profiles")
-        .select("id, name")
+        .select("id, user_name")
         .limit(10);
-      
+
       console.log("Available profiles in database:", allProfiles);
-      
-      return res.status(404).json({ 
+
+      return res.status(404).json({
         error: "Portfolio not found.",
         debug: {
           searchedFor: clientSlug,
-          availableProfiles: allProfiles?.map(p => p.name) || []
-        }
+          availableProfiles: allProfiles?.map((p) => p.user_name) || [],
+        },
       });
     }
 
@@ -288,8 +283,11 @@ export const portfolioChatWithPath = async (
     }
 
     const activeCV = cvRows[0];
-    const { extracted_text: cvContent, original_name: fileName, created_at } =
-      activeCV;
+    const {
+      extracted_text: cvContent,
+      original_name: fileName,
+      created_at,
+    } = activeCV;
 
     if (!cvContent) {
       return res
@@ -301,7 +299,9 @@ export const portfolioChatWithPath = async (
     const conversationHistory = messages
       .slice(0, -1)
       .map((msg: any) =>
-        msg.role === "user" ? `Visitor: ${msg.content}` : `Assistant: ${msg.content}`
+        msg.role === "user"
+          ? `Visitor: ${msg.content}`
+          : `Assistant: ${msg.content}`
       )
       .join("\n");
 
@@ -313,10 +313,14 @@ Use ONLY the information from their CV below to answer visitor questions.
 ${clientData.name.toUpperCase()}'S CV:
 ${cvContent}
 
-${conversationHistory ? `CONVERSATION HISTORY:\n${conversationHistory}\n\n` : ""}
+${
+  conversationHistory ? `CONVERSATION HISTORY:\n${conversationHistory}\n\n` : ""
+}
 VISITOR'S QUESTION: ${lastMessage.content}
 
-Please respond professionally, accurately, and in the tone of a friendly portfolio guide for ${clientData.name}.
+Please respond professionally, accurately, and in the tone of a friendly portfolio guide for ${
+      clientData.name
+    }.
     `.trim();
 
     // 6) Generate
