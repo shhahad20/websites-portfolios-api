@@ -235,11 +235,14 @@ export const portfolioChatWithPath = async (
 
       console.log("Available profiles in database:", allProfiles);
 
+      // Define a type for profile rows
+      type ProfileRow = { id: string; user_name: string };
+
       return res.status(404).json({
         error: "Portfolio not found.",
         debug: {
           searchedFor: clientSlug,
-          availableProfiles: allProfiles?.map((p) => p.user_name) || [],
+          availableProfiles: (allProfiles as ProfileRow[] | undefined)?.map((p) => p.user_name) || [],
         },
       });
     }

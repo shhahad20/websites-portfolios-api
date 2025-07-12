@@ -19,11 +19,8 @@ dist-ssr
 
 src/config/index.ts
 dist/src/config/index.js
-src/config/supabaseClient.ts
-dist/src/config/supabaseClient.js
 
-src/config/prompts.ts
-dist/src/config/prompts.js
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
