@@ -93,8 +93,8 @@ export const login = async (req: Request, res: Response) => {
 
 export const getProfile = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    // You'll need to implement auth middleware to get the user ID
-    const userId = req.user?.id; // Assuming you have auth middleware
+
+    const userId = req.user?.id;
     
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -156,6 +156,32 @@ export const deleteUser = async (req: AuthenticatedRequest, res: Response) => {
     res.json({ message: 'User deleted successfully' });
   } catch (err) {
     console.error('Delete user error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const getClientData = async (req: Request, res: Response) => {
+  try {
+
+    const clientSlug = req.params.slug;
+    
+    if (!clientSlug) {
+      return res.status(401).json({ error: 'No client sulg provided!' });
+    }
+    
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('name, email')
+      .eq('slug', clientSlug)
+      .single();
+    
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+    
+    res.json({ profile: data });
+  } catch (err) {
+    console.error('Get profile error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
