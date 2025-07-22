@@ -12,32 +12,26 @@ import { aiChat } from "../src/controllers/aiController.js"; // wherever you put
 
 
 const app = express();
-app.use("/public", express.static("public"));
+
+// ─── CORS SETUP ────────────────────────────────────────────────────────────
+app.use(
+  cors({
+    origin: [
+      "https://websites-portfolios.vercel.app",
+      "http://localhost:5173",
+    ],
+    methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+    credentials: true,
+  })
+);
+// Also allow all pre‑flights:
+app.options("*", cors());
+
+// ─── OTHER MIDDLEWARE ─────────────────────────────────────────────────────
 
 app.use(cookieParser());
 app.use(morgan("dev"));
-// at the top of your file
-const allowedOrigins = [
-  "https://websites-portfolios.vercel.app",       
-  "http://localhost:5173",         
-];
-
-app.use(
-  cors({
-    origin: (incomingOrigin, callback) => {
-      // If no Origin header (e.g. server–to–server) or it’s in our list, allow it
-      if (!incomingOrigin || allowedOrigins.includes(incomingOrigin)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
-      }
-    },
-    credentials: true,               // so that Set-Cookie is allowed
-  })
-);
-
-app.options("*", cors());  // enable for all routes
-
+app.use("/public", express.static("public"));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
@@ -45,7 +39,9 @@ app.use(express.json());
 app.use('/auth', authRoutes);
 app.use('/pdf', promptsRoutes);
 app.post("/ai/chat", aiChat);
-
+app.get('/test-cors', (req, res) => {
+  res.json({ message: 'CORS working!' });
+});
 app.get('/', (_req: Request, res: Response) => {
   res.send('Hello World!');
 });
