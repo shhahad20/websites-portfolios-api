@@ -8,6 +8,8 @@ dotenv.config();
 
 import authRoutes from '../src/routes/authRoutes.js';
 import promptsRoutes from '../src/routes/promptsRoutes.js';
+import builderRoutes from '../src/routes/builderRoutes.js';
+
 import { aiChat } from "../src/controllers/aiController.js"; // wherever you put it
 
 
@@ -38,7 +40,7 @@ app.use(express.json());
 
 app.use('/auth', authRoutes);
 app.use('/pdf', promptsRoutes);
-app.use('/api/builder', promptsRoutes);
+app.use('/api/builder', builderRoutes);
 app.post("/ai/chat", aiChat);
 app.get('/test-cors', (req, res) => {
   res.json({ message: 'CORS working!' });

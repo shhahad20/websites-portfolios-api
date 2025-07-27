@@ -154,7 +154,7 @@ export const saveBuilderSettings = async (req: AuthenticatedRequest, res: Respon
   } catch (error) {
     console.error('Error in saveBuilderSettings:', error);
     res.status(500).json({ error: 'Internal server error' });
-  }
+  } 
 };
 
 // Delete builder settings
