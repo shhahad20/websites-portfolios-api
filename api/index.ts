@@ -38,6 +38,7 @@ app.use(express.json());
 
 app.use('/auth', authRoutes);
 app.use('/pdf', promptsRoutes);
+app.use('/api/builder', promptsRoutes);
 app.post("/ai/chat", aiChat);
 app.get('/test-cors', (req, res) => {
   res.json({ message: 'CORS working!' });
