@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import { adminSupabase, supabase } from "../config/supabaseClient.js";
 import { AuthenticatedRequest } from "../middleware/authMiddleware.js";
+import dotenv from "dotenv";
+dotenv.config();
 
 export const register = async (req: Request, res: Response) => {
   const { email, password, name, phone } = req.body;
@@ -23,6 +25,7 @@ export const register = async (req: Request, res: Response) => {
           name: name.trim(),
           phone: phone?.trim() || null,
         },
+        emailRedirectTo: `${process.env.BACKEND_URL}/confirm-email`,
       },
     });
 
@@ -187,4 +190,25 @@ export const getClientData = async (req: Request, res: Response) => {
     console.error("Get profile error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
+};
+export const confirmEmail = async (req: Request, res: Response) => {
+  return res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Email Confirmed</title>
+        <style>
+          body { font-family: sans-serif; text-align: center; padding: 4rem; }
+          h1 { color: #6d5bba; }
+          a { color: #6d5bba; text-decoration: none; }
+        </style>
+      </head>
+      <body>
+        <h1>✅ Your email is confirmed!</h1>
+        <p>Thanks for verifying your address.</p>
+        <p><a href="/">Return to home page</a></p>
+      </body>
+    </html>
+  `);
 };
