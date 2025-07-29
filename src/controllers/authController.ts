@@ -25,7 +25,7 @@ export const register = async (req: Request, res: Response) => {
           name: name.trim(),
           phone: phone?.trim() || null,
         },
-        emailRedirectTo: `${process.env.BACKEND_URL}/confirm-email`,
+        emailRedirectTo: `${process.env.BACKEND_URL}/auth/confirmed-email`,
       },
     });
 
@@ -191,7 +191,7 @@ export const getClientData = async (req: Request, res: Response) => {
     res.status(500).json({ error: "Internal server error" });
   }
 };
-export const confirmEmail = async (req: Request, res: Response) => {
+export const confirmedEmail = async (req: Request, res: Response) => {
   return res.send(`
     <!DOCTYPE html>
     <html>
@@ -207,8 +207,31 @@ export const confirmEmail = async (req: Request, res: Response) => {
       <body>
         <h1>✅ Your email is confirmed!</h1>
         <p>Thanks for verifying your address.</p>
-        <p><a href="/">Return to home page</a></p>
+        <p><a href="${process.env.FRONTEND_URL}">Return to home page</a></p>
       </body>
     </html>
   `);
 };
+export const confirmEmail = async (req: Request, res: Response) => {
+ // Supabase’s default link uses query “token” and type=signup
+  const token = (req.query.token as string) || (req.query.token_hash as string)
+  if (!token) {
+    return res.status(400).send('Missing token')
+  }
+
+  // this flips email_confirmed_at in your DB
+  const { data, error } = await supabase.auth.verifyOtp({
+    email: req.query.email as string,
+    token, 
+    type: 'signup'
+  })
+
+  if (error) {
+    console.error('Verification error', error)
+    return res.redirect(`/login?error=${encodeURIComponent(error.message)}`)
+  }
+
+  // you now get back a session in data.session if you want to auto‑login
+  return res.redirect('/login?confirmed=1')
+
+}
