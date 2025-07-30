@@ -25,7 +25,7 @@ export const register = async (req: Request, res: Response) => {
           name: name.trim(),
           phone: phone?.trim() || null,
         },
-        emailRedirectTo: `${process.env.BACKEND_URL}/auth/confirmed-email`,
+        // emailRedirectTo: `${process.env.BACKEND_URL}/auth/confirmed-email`,
       },
     });
 
@@ -213,25 +213,120 @@ export const confirmedEmail = async (req: Request, res: Response) => {
   `);
 };
 export const confirmEmail = async (req: Request, res: Response) => {
- // Supabase’s default link uses query “token” and type=signup
-  const token = (req.query.token as string) || (req.query.token_hash as string)
-  if (!token) {
-    return res.status(400).send('Missing token')
+  const email = (req.query.email as string) ?? ''
+  const token = (req.query.token as string) || (req.query.token_hash as string);
+ if (!email || !token) {
+    return res
+      .status(400)
+      .send(`
+        <h1>Invalid Confirmation Link</h1>
+        <p>Missing ${!email ? 'email' : 'token'} in the URL.</p>
+      `)
   }
 
-  // this flips email_confirmed_at in your DB
-  const { data, error } = await supabase.auth.verifyOtp({
-    email: req.query.email as string,
-    token, 
-    type: 'signup'
-  })
+  // Flip email_confirmed_at in the DB
+  const { error } = await supabase.auth.verifyOtp({
+    email,
+    token,
+    type: "signup",
+  });
 
   if (error) {
-    console.error('Verification error', error)
-    return res.redirect(`/login?error=${encodeURIComponent(error.message)}`)
+    console.error("Verification error", error);
+    return res.status(400).send(`
+        <html>
+          <body>
+            <h1>Email Confirmation Failed</h1>
+            <p>${error.message}</p>
+          </body>
+        </html>
+      `);
   }
 
-  // you now get back a session in data.session if you want to auto‑login
-  return res.redirect('/login?confirmed=1')
+  // Success!
+  return res.status(200).send(`
+      <html>
+        <body>
+          <h1>Email Confirmed</h1>
+          <p>Your email has been successfully confirmed. You can now <a href="/auth/login">log in</a>.</p>
+        </body>
+      </html>
+    `);
+};
+export const authCallback = async (req: Request, res: Response) => {
+  const { code, error, error_description } = req.query;
 
-}
+  if (error) {
+    console.error("Auth callback error:", error, error_description);
+    return res.status(400).send(`
+      <html>
+        <body>
+          <h1>Email Confirmation Failed</h1>
+          <p>${error_description || 'Error confirming user'}</p>
+          <a href="/auth/login">Try logging in</a>
+        </body>
+      </html>
+    `);
+  }
+
+  if (!code) {
+    return res.status(400).send(`
+      <html>
+        <body>
+          <h1>Invalid Confirmation Link</h1>
+          <p>Missing authorization code.</p>
+        </body>
+      </html>
+    `);
+  }
+
+  try {
+    // Exchange the code for a session
+    const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code as string);
+    
+    if (exchangeError) {
+      console.error("Code exchange error:", exchangeError);
+      return res.status(400).send(`
+        <html>
+          <body>
+            <h1>Email Confirmation Failed</h1>
+            <p>${exchangeError.message}</p>
+          </body>
+        </html>
+      `);
+    }
+
+    // Success! User is now confirmed
+    // Set session cookies if you're using cookie-based auth
+    if (data.session) {
+      // Set httpOnly cookies for the session
+      res.cookie('sb-access-token', data.session.access_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: data.session.expires_in * 1000
+      });
+      
+      res.cookie('sb-refresh-token', data.session.refresh_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+      });
+    }
+
+    // Redirect to success page or dashboard
+    return res.redirect('/dashboard'); // or wherever you want users to go
+    
+  } catch (err) {
+    console.error("Unexpected error:", err);
+    return res.status(500).send(`
+      <html>
+        <body>
+          <h1>Email Confirmation Failed</h1>
+          <p>An unexpected error occurred. Please try again.</p>
+        </body>
+      </html>
+    `);
+  }
+};
