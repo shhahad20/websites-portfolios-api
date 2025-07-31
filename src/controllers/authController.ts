@@ -5,13 +5,19 @@ import dotenv from "dotenv";
 dotenv.config();
 
 export const register = async (req: Request, res: Response) => {
-  const { email, password, name, phone } = req.body;
+const { email, password, name, phone, user_name, gender } = req.body;
 
-  // Validation
-  if (!email || !password || !name) {
+  // Basic validation
+  if (!email || !password || !name || !user_name || !gender) {
     return res.status(400).json({
-      error: "Email, password, and name are required",
-      received: { email: !!email, password: !!password, name: !!name },
+      error: "Missing required fields",
+      received: {
+        email: !!email,
+        password: !!password,
+        name: !!name,
+        user_name: !!user_name,
+        gender: !!gender,
+      },
     });
   }
 
@@ -24,6 +30,8 @@ export const register = async (req: Request, res: Response) => {
         data: {
           name: name.trim(),
           phone: phone?.trim() || null,
+          user_name: user_name.trim(),
+          gender: gender.trim(),
         },
         // emailRedirectTo: `${process.env.BACKEND_URL}/auth/confirmed-email`,
       },
