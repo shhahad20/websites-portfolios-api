@@ -196,11 +196,11 @@ export const uploadAvatar = async (req: AuthenticatedRequest, res: Response) => 
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const fileName = `${userId}_${Date.now()}_${req.file.originalname}`;
+    const fileName = `Avatar_${userId}_${Date.now()}_${req.file.originalname}`;
     
     // Upload to Supabase Storage
     const { data, error } = await supabase.storage
-      .from('avatars')
+      .from('uploads')
       .upload(fileName, req.file.buffer, {
         contentType: req.file.mimetype,
         upsert: true
@@ -213,7 +213,7 @@ export const uploadAvatar = async (req: AuthenticatedRequest, res: Response) => 
 
     // Get public URL
     const { data: { publicUrl } } = supabase.storage
-      .from('avatars')
+      .from('uploads')
       .getPublicUrl(fileName);
 
     res.json({ 
